@@ -1,0 +1,102 @@
+#!/bin/bash
+# dyfetch <抖音短链或分享文本> [输出目录]
+# 解析抖音短链 → 下载无水印 mp4
+# 默认输出到当前目录, 文件名 douyin_<item_id>.mp4
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "用法: dyfetch <抖音短链 | 含链接的分享文本> [输出目录]"
+  echo "例:   dyfetch https://v.douyin.com/_7K_L3Mu-44/"
+  echo "      dyfetch \"3.89 复制打开抖音... https://v.douyin.com/xxx/ ...\" ~/Downloads"
+  exit 1
+fi
+
+INPUT="$1"
+OUT="${2:-.}"
+mkdir -p "$OUT"
+
+URL=$(echo "$INPUT" | grep -oE 'https?://[^[:space:]]*(douyin|iesdouyin)[^[:space:]]*' | head -1)
+[ -z "$URL" ] && { echo "未在输入中找到抖音链接"; exit 1; }
+
+UA="Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+REF="https://www.douyin.com/"
+
+echo "[1/4] 跟随重定向: $URL"
+SHARE_URL=$(curl -sILA "$UA" "$URL" | awk -F': ' 'tolower($1)=="location"{print $2}' | tr -d '\r' | tail -1)
+[ -z "$SHARE_URL" ] && SHARE_URL="$URL"
+ITEM_ID=$(echo "$SHARE_URL" | grep -oE '/(video|note)/[0-9]+' | grep -oE '[0-9]+' | head -1)
+[ -z "$ITEM_ID" ] && ITEM_ID=$(echo "$URL" | grep -oE '[0-9]{15,25}' | head -1)
+[ -z "$ITEM_ID" ] && { echo "无法提取 item_id, share_url=$SHARE_URL"; exit 1; }
+echo "       item_id=$ITEM_ID"
+
+echo "[2/4] 拉分享页 HTML"
+HTML=$(mktemp -t dyfetch.XXXXXX.html)
+trap 'rm -f "$HTML"' EXIT
+curl -sLA "$UA" -H "Referer: $REF" "https://www.iesdouyin.com/share/video/$ITEM_ID/" -o "$HTML"
+[ ! -s "$HTML" ] && { echo "分享页拉取失败"; exit 1; }
+
+echo "[3/4] 提取播放 URL (从 _ROUTER_DATA)"
+PLAY_URL=$(python3 - "$HTML" <<'PY'
+import re, json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    s = f.read()
+m = re.search(r'_ROUTER_DATA\s*=\s*', s)
+if not m:
+    sys.exit('未找到 _ROUTER_DATA')
+i = m.end()
+# 括号计数找匹配的 }
+assert s[i] == '{', f'_ROUTER_DATA 后不是 {{: {s[i:i+20]!r}'
+depth = 0; j = i; in_str = False; esc = False
+while j < len(s):
+    c = s[j]
+    if esc:
+        esc = False
+    elif c == '\\':
+        esc = True
+    elif in_str:
+        if c == '"':
+            in_str = False
+    elif c == '"':
+        in_str = True
+    elif c == '{':
+        depth += 1
+    elif c == '}':
+        depth -= 1
+        if depth == 0:
+            j += 1
+            break
+    j += 1
+d = json.loads(s[i:j])
+def walk(x):
+    if isinstance(x, dict):
+        for v in x.values():
+            yield from walk(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from walk(v)
+    elif isinstance(x, str) and 'aweme/v1/play' in x:
+        yield x
+for u in walk(d):
+    print(u)
+    break
+PY
+)
+[ -z "$PLAY_URL" ] && { echo "未在 _ROUTER_DATA 中找到 aweme/v1/play URL"; exit 1; }
+NOWM_URL=$(echo "$PLAY_URL" | sed 's|/playwm/|/play/|')
+echo "       $NOWM_URL"
+
+echo "[4/4] 下载无水印 mp4"
+OUTFILE="$OUT/douyin_$ITEM_ID.mp4"
+curl -sLA "$UA" -H "Referer: $REF" "$NOWM_URL" -o "$OUTFILE"
+SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
+[ "$SIZE" -lt 100000 ] && { echo "下载文件过小 ($SIZE bytes), 可能被反爬"; rm -f "$OUTFILE"; exit 1; }
+
+if file "$OUTFILE" | grep -q "ISO Media\|MP4"; then
+  HUMAN=$(numfmt --to=iec "$SIZE" 2>/dev/null || echo "$SIZE B")
+  echo "✓ $OUTFILE ($HUMAN)"
+  echo ""
+  echo "下一步可选: 用任意 ASR 转写 (FunASR / WhisperX / whisper.cpp)"
+else
+  echo "下载内容不是 mp4:"; file "$OUTFILE"
+  exit 1
+fi
