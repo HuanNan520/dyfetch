@@ -32,10 +32,12 @@ dyfetch "<短链或含链接的分享文本>" [输出目录]
 3. **解析 JSON**: HTML 里 `window._ROUTER_DATA = {...}</script>` 用括号计数提取 (不能 regex `};window`,JSON 后面是 `</script>` 不是另一个 window 赋值)
 4. **去水印**: 从 `play_addr/url_list[0]` 拿到 `aweme.snssdk.com/aweme/v1/playwm/?video_id=...`,把 `playwm` 改成 `play`
 5. **下载**: 同样用 iPhone UA + Referer
+6. **反爬 fallback**: 分享页 HTML < 10KB(约 2.5KB 遥测空壳页)或 `_ROUTER_DATA` 提取为空时,自动改走 `www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=<id>&device_platform=webapp&aid=6383&channel=channel_pc_web`,从 `aweme_detail.video.play_addr.url_list` 取无水印直链(优先 `douyinvod.com`)。该接口必须用 `www.douyin.com` 域名,`iesdouyin` 同名接口返 `blocked`
 
 ## 已知失败模式
 - yt-dlp 直接报 "Fresh cookies needed" — 因为它走 douyin.com 主站接口。**不要回退到 yt-dlp**,继续走 iesdouyin 分享页就行
 - 若 `_ROUTER_DATA` 解析失败,先 `curl` 把 HTML 存下来手动 grep `window._ROUTER_DATA` 看分隔符是否变了
+- **分享页返回约 2.5KB 空壳页(只有遥测脚本、无 `_ROUTER_DATA`)**:抖音概率性反爬,脚本会自动转 detail JSON 接口(见实现要点 6),无需手动干预
 - 若下载文件 < 100KB,大概率被反爬,换个 UA 再试
 
 ## ASR 后处理建议

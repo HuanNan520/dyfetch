@@ -32,20 +32,25 @@ echo "       item_id=$ITEM_ID"
 echo "[2/4] 拉分享页 HTML"
 HTML=$(mktemp -t dyfetch.XXXXXX.html)
 trap 'rm -f "$HTML"' EXIT
-curl -sLA "$UA" -H "Referer: $REF" "https://www.iesdouyin.com/share/video/$ITEM_ID/" -o "$HTML"
+curl -sLA "$UA" --retry 3 --retry-all-errors --max-time 60 -H "Referer: $REF" "https://www.iesdouyin.com/share/video/$ITEM_ID/" -o "$HTML"
 [ ! -s "$HTML" ] && { echo "分享页拉取失败"; exit 1; }
 
 echo "[3/4] 提取播放 URL (从 _ROUTER_DATA)"
-PLAY_URL=$(python3 - "$HTML" <<'PY'
+# 分享页正常约几百 KB; 反爬拦截时只返回约 2.5KB 的遥测空壳页(无 _ROUTER_DATA)
+HTML_SIZE=$(stat -c%s "$HTML" 2>/dev/null || echo 0)
+PLAY_URL=""
+if [ "$HTML_SIZE" -ge 10000 ]; then
+  PLAY_URL=$(python3 - "$HTML" <<'PY'
 import re, json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
     s = f.read()
 m = re.search(r'_ROUTER_DATA\s*=\s*', s)
 if not m:
-    sys.exit('未找到 _ROUTER_DATA')
+    sys.exit(0)  # 没有 _ROUTER_DATA, 交给 fallback
 i = m.end()
 # 括号计数找匹配的 }
-assert s[i] == '{', f'_ROUTER_DATA 后不是 {{: {s[i:i+20]!r}'
+if s[i] != '{':
+    sys.exit(0)
 depth = 0; j = i; in_str = False; esc = False
 while j < len(s):
     c = s[j]
@@ -66,7 +71,10 @@ while j < len(s):
             j += 1
             break
     j += 1
-d = json.loads(s[i:j])
+try:
+    d = json.loads(s[i:j])
+except Exception:
+    sys.exit(0)
 def walk(x):
     if isinstance(x, dict):
         for v in x.values():
@@ -81,13 +89,45 @@ for u in walk(d):
     break
 PY
 )
-[ -z "$PLAY_URL" ] && { echo "未在 _ROUTER_DATA 中找到 aweme/v1/play URL"; exit 1; }
-NOWM_URL=$(echo "$PLAY_URL" | sed 's|/playwm/|/play/|')
+else
+  echo "       分享页异常小 ($HTML_SIZE bytes), 疑似反爬空壳页, 改走 JSON 接口"
+fi
+
+if [ -n "$PLAY_URL" ]; then
+  NOWM_URL=$(echo "$PLAY_URL" | sed 's|/playwm/|/play/|')
+else
+  # === fallback: 分享页被反爬拦截 / _ROUTER_DATA 提取为空 时, 改走 detail JSON 接口 ===
+  # www.douyin.com 的 web detail 接口不在反爬名单内, 直接返回完整 aweme_detail
+  # (iesdouyin 同名接口会返回 "blocked"/encrypt 错误码, 故必须用 www.douyin.com)
+  echo "       走 detail JSON 接口 (aweme/v1/web/aweme/detail)"
+  DETAIL=$(mktemp -t dyfetch.XXXXXX.json)
+  trap 'rm -f "$HTML" "$DETAIL"' EXIT
+  curl -sLA "$UA" --retry 3 --retry-all-errors --max-time 60 -H "Referer: $REF" \
+    "https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=$ITEM_ID&device_platform=webapp&aid=6383&channel=channel_pc_web" \
+    -o "$DETAIL"
+  [ ! -s "$DETAIL" ] && { echo "detail JSON 拉取失败"; exit 1; }
+  NOWM_URL=$(python3 - "$DETAIL" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception as e:
+    sys.exit('detail JSON 解析失败: %s' % e)
+ad = d.get('aweme_detail')
+if not isinstance(ad, dict):
+    sys.exit('detail JSON 无 aweme_detail (status_code=%s)' % d.get('status_code'))
+ul = ad.get('video', {}).get('play_addr', {}).get('url_list') or []
+# douyinvod.com 直链已是无水印 CDN, 优先; 否则退回 aweme/v1/play 接口链(同样无水印)
+best = next((u for u in ul if 'douyinvod.com' in u), None) or (ul[0] if ul else '')
+print(best)
+PY
+)
+  [ -z "$NOWM_URL" ] && { echo "detail JSON 中未找到播放地址"; exit 1; }
+fi
 echo "       $NOWM_URL"
 
 echo "[4/4] 下载无水印 mp4"
 OUTFILE="$OUT/douyin_$ITEM_ID.mp4"
-curl -sLA "$UA" -H "Referer: $REF" "$NOWM_URL" -o "$OUTFILE"
+curl -sLA "$UA" --retry 3 --retry-all-errors --max-time 240 -H "Referer: $REF" "$NOWM_URL" -o "$OUTFILE"
 SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
 [ "$SIZE" -lt 100000 ] && { echo "下载文件过小 ($SIZE bytes), 可能被反爬"; rm -f "$OUTFILE"; exit 1; }
 
@@ -95,7 +135,8 @@ if file "$OUTFILE" | grep -q "ISO Media\|MP4"; then
   HUMAN=$(numfmt --to=iec "$SIZE" 2>/dev/null || echo "$SIZE B")
   echo "✓ $OUTFILE ($HUMAN)"
   echo ""
-  echo "下一步可选: 用任意 ASR 转写 (FunASR / WhisperX / whisper.cpp)"
+  echo "下一步可选:"
+  echo "  transcribe \"$OUTFILE\"       # FunASR 中文转写"
 else
   echo "下载内容不是 mp4:"; file "$OUTFILE"
   exit 1
