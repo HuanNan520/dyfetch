@@ -1,73 +1,73 @@
 # dyfetch
 
-抖音无水印 mp4 下载。绕开 yt-dlp 在抖音的失效路径(主站接口要 cookies),走 iesdouyin 分享页 + iPhone UA 直接拿源。
+No-watermark mp4 downloader for Douyin. Bypasses yt-dlp's broken path on Douyin (the main-site API now requires cookies) by going through the iesdouyin share page + an iPhone UA to grab the source directly.
 
-附带 [Claude Code](https://docs.claude.com/en/docs/claude-code) SKILL,贴抖音短链给 Claude 时会自动调用。
+Ships with a [Claude Code](https://docs.claude.com/en/docs/claude-code) SKILL, so pasting a Douyin short link to Claude triggers it automatically.
 
-## 安装
+## Install
 
-依赖:`bash` `curl` `python3` `file`(标准 Linux 工具,WSL / macOS 都有)
+Dependencies: `bash` `curl` `python3` `file` (standard Linux tools, available on WSL / macOS).
 
 ```bash
 git clone https://github.com/HuanNan520/dyfetch.git
 cd dyfetch
 
-# 1. 装脚本到 PATH
+# 1. Install the script into your PATH
 sudo install dyfetch /usr/local/bin/
-# 或不要 sudo:install -D dyfetch ~/.local/bin/dyfetch (确保 ~/.local/bin 在 PATH)
+# Or without sudo: install -D dyfetch ~/.local/bin/dyfetch (make sure ~/.local/bin is on PATH)
 
-# 2. (可选) 让 Claude Code 自动识别抖音链接
+# 2. (Optional) Let Claude Code auto-detect Douyin links
 mkdir -p ~/.claude/skills/dyfetch/
 cp SKILL.md ~/.claude/skills/dyfetch/
 ```
 
-## 用法
+## Usage
 
 ```bash
-# 短链
+# Short link
 dyfetch https://v.douyin.com/_7K_L3Mu-44/
 
-# 带分享文案直接贴(自动提取链接)
-dyfetch "3.89 复制打开抖音,看看【xxx 的作品】https://v.douyin.com/xxx/ AbC:/"
+# Paste the full share text (the link is extracted automatically)
+dyfetch "3.89 Copy and open Douyin, check out [someone's video] https://v.douyin.com/xxx/ AbC:/"
 
-# 指定输出目录
+# Specify an output directory
 dyfetch https://v.douyin.com/xxx/ ~/Downloads
 ```
 
-输出文件:`douyin_<item_id>.mp4` (720p H.264 + AAC)
+Output file: `douyin_<item_id>.mp4` (720p H.264 + AAC)
 
-## 反爬 fallback
+## Anti-scraping fallback
 
-抖音对 `iesdouyin.com/share/video/<id>/` 分享页有概率性反爬:命中时只返回约 2.5KB 的遥测空壳页,里面没有 `_ROUTER_DATA`,主路径提取就会失败。
+Douyin applies probabilistic anti-scraping to the `iesdouyin.com/share/video/<id>/` share page: when triggered, it returns only a ~2.5KB telemetry stub page with no `_ROUTER_DATA`, so the primary extraction path fails.
 
-脚本对此有自动 fallback:当分享页 HTML 异常小(< 10KB)或 `_ROUTER_DATA` 提取为空时,改走 `www.douyin.com/aweme/v1/web/aweme/detail/` JSON 接口,从 `aweme_detail.video.play_addr.url_list` 取无水印 CDN 直链(优先 `douyinvod.com`)。该接口不在反爬名单内、无需 cookie,整个过程对用户透明,不用加任何参数。
+The script handles this with an automatic fallback: when the share-page HTML is abnormally small (< 10KB) or `_ROUTER_DATA` extraction comes back empty, it switches to the `www.douyin.com/aweme/v1/web/aweme/detail/` JSON API and pulls the no-watermark CDN direct link from `aweme_detail.video.play_addr.url_list` (preferring `douyinvod.com`). This API is not on the anti-scraping list and needs no cookie; the whole process is transparent to the user and requires no extra arguments.
 
-> 注意:同名的 `iesdouyin.com/aweme/v1/web/aweme/detail/` 接口会返回 `blocked` / 加密错误码,必须用 `www.douyin.com` 主站域名。
+> Note: the same-named `iesdouyin.com/aweme/v1/web/aweme/detail/` endpoint returns a `blocked` / encrypted error code — you must use the `www.douyin.com` main-site domain.
 
-## 配套 ASR(可选)
+## Companion ASR (optional)
 
-下载后想做"视频 → 文字 → 喂给 LLM 解析"工作流,自选转写工具:
+If you want a "video → text → feed to an LLM for analysis" workflow after downloading, pick a transcription tool:
 
-| 工具 | 适用 | 安装 |
+| Tool | Best for | Install |
 |---|---|---|
-| [FunASR](https://github.com/modelscope/FunASR) | 中文 SOTA,带标点 + 说话人分离 | `pip install funasr`,推荐模型 `paraformer-zh + fsmn-vad + ct-punc + cam++` |
-| [WhisperX](https://github.com/m-bain/whisperX) | 多语言,词级时间戳 + 说话人 | `pip install whisperx` |
-| [whisper.cpp](https://github.com/ggerganov/whisper.cpp) | 无 GPU 可跑 | 见仓库 |
+| [FunASR](https://github.com/modelscope/FunASR) | Chinese SOTA, punctuation + speaker diarization | `pip install funasr`, recommended models `paraformer-zh + fsmn-vad + ct-punc + cam++` |
+| [WhisperX](https://github.com/m-bain/whisperX) | Multilingual, word-level timestamps + speakers | `pip install whisperx` |
+| [whisper.cpp](https://github.com/ggerganov/whisper.cpp) | Runs without a GPU | see repo |
 
-## 与 Claude Code 配合
+## Working with Claude Code
 
-SKILL.md 放进 `~/.claude/skills/dyfetch/` 后,Claude Code 启动会自动识别。之后在对话里贴抖音短链,Claude 会:
+Once SKILL.md is placed in `~/.claude/skills/dyfetch/`, Claude Code auto-detects it on startup. After that, paste a Douyin short link in a conversation and Claude will:
 
-1. 自动调 `dyfetch` 下载无水印 mp4
-2. 如果你装了 ASR,继续调你的 ASR 转写
-3. 把文字喂给自己,解析视频内容 / 列大纲 / 答你的问题
+1. Automatically call `dyfetch` to download the no-watermark mp4
+2. If you have an ASR tool installed, run it to transcribe
+3. Feed the text back to itself to analyze the video / outline it / answer your questions
 
-## 已知限制
+## Known limitations
 
-- 只搞抖音。B站 / YouTube 用 `yt-dlp` 直接 work,不需要这个
-- 抖音分享页 HTML 结构变了的话,`_ROUTER_DATA` 解析可能要调,见 SKILL.md "已知失败模式" 节
-- 分享页被反爬拦截时会自动转 detail JSON 接口(见上节);若两条路同时失效,大概率是 UA / 接口策略又变了
-- 不绕风控,只是用合法分享页 + 移动端 UA;若抖音封移动端访问,这个方案就失效
+- Douyin only. For Bilibili / YouTube, `yt-dlp` works directly — you don't need this.
+- If Douyin's share-page HTML structure changes, the `_ROUTER_DATA` parsing may need adjustment — see the "Known failure modes" section in SKILL.md.
+- When the share page is blocked by anti-scraping, it falls back to the detail JSON API automatically (see the section above); if both paths fail at once, the UA / API policy has most likely changed again.
+- It does not circumvent risk control — it only uses the legitimate share page + a mobile UA. If Douyin blocks mobile access, this approach stops working.
 
 ## License
 

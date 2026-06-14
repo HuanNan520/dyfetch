@@ -1,49 +1,46 @@
 ---
 name: dyfetch
-description: Download a no-watermark mp4 from a Douyin (抖音) share link. Use when the user shares a `v.douyin.com/...` short link or pasted Douyin share text and asks to download / save / extract / 转文字 / 提取视频 / 下载 / 保存.
+description: Download a no-watermark mp4 from a Douyin (抖音) share link. Use when the user shares a `v.douyin.com/...` short link or pasted Douyin share text and asks to download / save / extract / transcribe / 转文字 / 提取视频 / 下载 / 保存.
 ---
 
-# dyfetch — 抖音无水印视频下载
+# dyfetch — Douyin no-watermark video downloader
 
-绕过 yt-dlp 在抖音的失效路径(主站接口要 cookies),走 iesdouyin 分享页 + iPhone UA 拿无水印 mp4。
+Bypasses yt-dlp's broken path on Douyin (the main-site API now requires cookies) by going through the iesdouyin share page + an iPhone UA to grab the no-watermark mp4.
 
-## 何时用
-- 用户贴 `v.douyin.com/xxxx` 短链,或带分享文案的 `3.89 复制打开抖音... https://v.douyin.com/xxx/ ...` 文本
-- 用户给 `iesdouyin.com/share/video/<id>/` 也行
-- 用户说 "下载 / 保存 / 转文字 / 提取"
+## When to use
+- The user pastes a `v.douyin.com/xxxx` short link, or share text containing a link like `3.89 Copy and open Douyin... https://v.douyin.com/xxx/ ...`
+- A direct `iesdouyin.com/share/video/<id>/` link works too
+- The user asks to "download / save / transcribe / extract" (including the Chinese equivalents 下载 / 保存 / 转文字 / 提取)
 
-## 工具
-- `dyfetch` — 解析短链 → 下载无水印 mp4 (720p H.264 + AAC),需加入 PATH
+## Tool
+- `dyfetch` — resolves the short link → downloads the no-watermark mp4 (720p H.264 + AAC); must be on PATH
 
-## 标准流程
+## Standard flow
 ```bash
-dyfetch "<短链或含链接的分享文本>" [输出目录]
+dyfetch "<short link or share text containing a link>" [output dir]
 # → douyin_<item_id>.mp4
 ```
 
-下载后若用户要转写,自选 ASR:
-- **FunASR** (中文 SOTA,需 GPU): `pip install funasr`,推荐 `paraformer-zh + fsmn-vad + ct-punc`
-- **WhisperX** (多语言 + 词级时间戳 + 说话人): `pip install whisperx`
-- **whisper.cpp** (CPU 友好): https://github.com/ggerganov/whisper.cpp
+After downloading, if the user wants a transcript, pick an ASR tool:
+- **FunASR** (Chinese SOTA, needs GPU): `pip install funasr`, recommended `paraformer-zh + fsmn-vad + ct-punc`
+- **WhisperX** (multilingual + word-level timestamps + speakers): `pip install whisperx`
+- **whisper.cpp** (CPU-friendly): https://github.com/ggerganov/whisper.cpp
 
-## 实现要点 (debug 时有用)
-1. **跟随短链 301**: `curl -I` 拿到 `iesdouyin.com/share/video/<item_id>/`
-2. **抓分享页**: 必须用 iPhone Safari UA + `Referer: douyin.com` (走 douyin.com 主站会要 cookies)
-3. **解析 JSON**: HTML 里 `window._ROUTER_DATA = {...}</script>` 用括号计数提取 (不能 regex `};window`,JSON 后面是 `</script>` 不是另一个 window 赋值)
-4. **去水印**: 从 `play_addr/url_list[0]` 拿到 `aweme.snssdk.com/aweme/v1/playwm/?video_id=...`,把 `playwm` 改成 `play`
-5. **下载**: 同样用 iPhone UA + Referer
-6. **反爬 fallback**: 分享页 HTML < 10KB(约 2.5KB 遥测空壳页)或 `_ROUTER_DATA` 提取为空时,自动改走 `www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=<id>&device_platform=webapp&aid=6383&channel=channel_pc_web`,从 `aweme_detail.video.play_addr.url_list` 取无水印直链(优先 `douyinvod.com`)。该接口必须用 `www.douyin.com` 域名,`iesdouyin` 同名接口返 `blocked`
+## Implementation notes (useful when debugging)
+1. **Follow the short-link 301**: `curl -I` to get `iesdouyin.com/share/video/<item_id>/`
+2. **Fetch the share page**: must use an iPhone Safari UA + `Referer: douyin.com` (going through douyin.com main site requires cookies)
+3. **Parse JSON**: extract `window._ROUTER_DATA = {...}</script>` from the HTML using bracket counting (you can't regex `};window` — the JSON is followed by `</script>`, not another window assignment)
+4. **Remove the watermark**: take `aweme.snssdk.com/aweme/v1/playwm/?video_id=...` from `play_addr/url_list[0]` and change `playwm` to `play`
+5. **Download**: again use the iPhone UA + Referer
+6. **Anti-scraping fallback**: when the share-page HTML is < 10KB (the ~2.5KB telemetry stub page) or `_ROUTER_DATA` extraction is empty, switch automatically to `www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=<id>&device_platform=webapp&aid=6383&channel=channel_pc_web` and pull the no-watermark direct link from `aweme_detail.video.play_addr.url_list` (preferring `douyinvod.com`). This endpoint must use the `www.douyin.com` domain — the same-named `iesdouyin` endpoint returns `blocked`.
 
-## 已知失败模式
-- yt-dlp 直接报 "Fresh cookies needed" — 因为它走 douyin.com 主站接口。**不要回退到 yt-dlp**,继续走 iesdouyin 分享页就行
-- 若 `_ROUTER_DATA` 解析失败,先 `curl` 把 HTML 存下来手动 grep `window._ROUTER_DATA` 看分隔符是否变了
-- **分享页返回约 2.5KB 空壳页(只有遥测脚本、无 `_ROUTER_DATA`)**:抖音概率性反爬,脚本会自动转 detail JSON 接口(见实现要点 6),无需手动干预
-- 若下载文件 < 100KB,大概率被反爬,换个 UA 再试
+## Known failure modes
+- yt-dlp reports "Fresh cookies needed" — because it hits the douyin.com main-site API. **Do not fall back to yt-dlp**; stay on the iesdouyin share page.
+- If `_ROUTER_DATA` parsing fails, first `curl` the HTML to disk and manually grep `window._ROUTER_DATA` to check whether the delimiter changed.
+- **Share page returns the ~2.5KB stub (telemetry script only, no `_ROUTER_DATA`)**: Douyin's probabilistic anti-scraping; the script switches to the detail JSON endpoint automatically (see implementation note 6), no manual intervention needed.
+- If the downloaded file is < 100KB, it was most likely blocked by anti-scraping — try a different UA.
 
-## ASR 后处理建议
-中文 ASR 常见同音错别字,转写后肉眼扫一遍:
-- 锐气 ↔ 婉气、通病 ↔ 通便、教养 ↔ 退养
-- 时时 ↔ 试试、咄咄逼人 ↔ 多咄逼人
-- 拒绝 ↔ 哪绝、消耗 ↔ 削好
+## ASR post-processing tips
+Chinese ASR commonly produces homophone typos, so scan the transcript by eye afterward. (For example, a Chinese ASR engine may swap acoustically near-identical words such as 锐气 ↔ 婉气 or 通病 ↔ 通便; fix any that obviously break the meaning.)
 
-按演讲结构(论点 → 分点 → 总结)重排比按句号顺序贴更可读。
+Re-ordering the transcript by speech structure (claim → sub-points → summary) reads better than pasting it sentence-by-sentence in original order.

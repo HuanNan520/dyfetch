@@ -1,13 +1,13 @@
 #!/bin/bash
-# dyfetch <抖音短链或分享文本> [输出目录]
-# 解析抖音短链 → 下载无水印 mp4
-# 默认输出到当前目录, 文件名 douyin_<item_id>.mp4
+# dyfetch <Douyin short link or share text> [output dir]
+# Resolves a Douyin short link → downloads the no-watermark mp4
+# Defaults to the current directory; file name douyin_<item_id>.mp4
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-  echo "用法: dyfetch <抖音短链 | 含链接的分享文本> [输出目录]"
-  echo "例:   dyfetch https://v.douyin.com/_7K_L3Mu-44/"
-  echo "      dyfetch \"3.89 复制打开抖音... https://v.douyin.com/xxx/ ...\" ~/Downloads"
+  echo "Usage: dyfetch <Douyin short link | share text containing a link> [output dir]"
+  echo "e.g.:  dyfetch https://v.douyin.com/_7K_L3Mu-44/"
+  echo "       dyfetch \"3.89 Copy and open Douyin... https://v.douyin.com/xxx/ ...\" ~/Downloads"
   exit 1
 fi
 
@@ -16,27 +16,27 @@ OUT="${2:-.}"
 mkdir -p "$OUT"
 
 URL=$(echo "$INPUT" | grep -oE 'https?://[^[:space:]]*(douyin|iesdouyin)[^[:space:]]*' | head -1)
-[ -z "$URL" ] && { echo "未在输入中找到抖音链接"; exit 1; }
+[ -z "$URL" ] && { echo "No Douyin link found in input"; exit 1; }
 
 UA="Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
 REF="https://www.douyin.com/"
 
-echo "[1/4] 跟随重定向: $URL"
+echo "[1/4] Following redirect: $URL"
 SHARE_URL=$(curl -sILA "$UA" "$URL" | awk -F': ' 'tolower($1)=="location"{print $2}' | tr -d '\r' | tail -1)
 [ -z "$SHARE_URL" ] && SHARE_URL="$URL"
 ITEM_ID=$(echo "$SHARE_URL" | grep -oE '/(video|note)/[0-9]+' | grep -oE '[0-9]+' | head -1)
 [ -z "$ITEM_ID" ] && ITEM_ID=$(echo "$URL" | grep -oE '[0-9]{15,25}' | head -1)
-[ -z "$ITEM_ID" ] && { echo "无法提取 item_id, share_url=$SHARE_URL"; exit 1; }
+[ -z "$ITEM_ID" ] && { echo "Could not extract item_id, share_url=$SHARE_URL"; exit 1; }
 echo "       item_id=$ITEM_ID"
 
-echo "[2/4] 拉分享页 HTML"
+echo "[2/4] Fetching share-page HTML"
 HTML=$(mktemp -t dyfetch.XXXXXX.html)
 trap 'rm -f "$HTML"' EXIT
 curl -sLA "$UA" --retry 3 --retry-all-errors --max-time 60 -H "Referer: $REF" "https://www.iesdouyin.com/share/video/$ITEM_ID/" -o "$HTML"
-[ ! -s "$HTML" ] && { echo "分享页拉取失败"; exit 1; }
+[ ! -s "$HTML" ] && { echo "Failed to fetch share page"; exit 1; }
 
-echo "[3/4] 提取播放 URL (从 _ROUTER_DATA)"
-# 分享页正常约几百 KB; 反爬拦截时只返回约 2.5KB 的遥测空壳页(无 _ROUTER_DATA)
+echo "[3/4] Extracting play URL (from _ROUTER_DATA)"
+# A normal share page is a few hundred KB; when anti-scraping kicks in it returns only a ~2.5KB telemetry stub page (no _ROUTER_DATA)
 HTML_SIZE=$(stat -c%s "$HTML" 2>/dev/null || echo 0)
 PLAY_URL=""
 if [ "$HTML_SIZE" -ge 10000 ]; then
@@ -46,9 +46,9 @@ with open(sys.argv[1], encoding='utf-8') as f:
     s = f.read()
 m = re.search(r'_ROUTER_DATA\s*=\s*', s)
 if not m:
-    sys.exit(0)  # 没有 _ROUTER_DATA, 交给 fallback
+    sys.exit(0)  # no _ROUTER_DATA, hand off to the fallback
 i = m.end()
-# 括号计数找匹配的 }
+# bracket counting to find the matching }
 if s[i] != '{':
     sys.exit(0)
 depth = 0; j = i; in_str = False; esc = False
@@ -90,54 +90,54 @@ for u in walk(d):
 PY
 )
 else
-  echo "       分享页异常小 ($HTML_SIZE bytes), 疑似反爬空壳页, 改走 JSON 接口"
+  echo "       Share page abnormally small ($HTML_SIZE bytes), likely an anti-scraping stub, switching to the JSON API"
 fi
 
 if [ -n "$PLAY_URL" ]; then
   NOWM_URL=$(echo "$PLAY_URL" | sed 's|/playwm/|/play/|')
 else
-  # === fallback: 分享页被反爬拦截 / _ROUTER_DATA 提取为空 时, 改走 detail JSON 接口 ===
-  # www.douyin.com 的 web detail 接口不在反爬名单内, 直接返回完整 aweme_detail
-  # (iesdouyin 同名接口会返回 "blocked"/encrypt 错误码, 故必须用 www.douyin.com)
-  echo "       走 detail JSON 接口 (aweme/v1/web/aweme/detail)"
+  # === fallback: when the share page is blocked by anti-scraping / _ROUTER_DATA extraction is empty, switch to the detail JSON API ===
+  # The www.douyin.com web detail endpoint is not on the anti-scraping list and returns the full aweme_detail directly
+  # (the same-named iesdouyin endpoint returns a "blocked"/encrypt error code, so www.douyin.com is required)
+  echo "       Using the detail JSON API (aweme/v1/web/aweme/detail)"
   DETAIL=$(mktemp -t dyfetch.XXXXXX.json)
   trap 'rm -f "$HTML" "$DETAIL"' EXIT
   curl -sLA "$UA" --retry 3 --retry-all-errors --max-time 60 -H "Referer: $REF" \
     "https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=$ITEM_ID&device_platform=webapp&aid=6383&channel=channel_pc_web" \
     -o "$DETAIL"
-  [ ! -s "$DETAIL" ] && { echo "detail JSON 拉取失败"; exit 1; }
+  [ ! -s "$DETAIL" ] && { echo "Failed to fetch detail JSON"; exit 1; }
   NOWM_URL=$(python3 - "$DETAIL" <<'PY'
 import json, sys
 try:
     d = json.load(open(sys.argv[1], encoding='utf-8'))
 except Exception as e:
-    sys.exit('detail JSON 解析失败: %s' % e)
+    sys.exit('Failed to parse detail JSON: %s' % e)
 ad = d.get('aweme_detail')
 if not isinstance(ad, dict):
-    sys.exit('detail JSON 无 aweme_detail (status_code=%s)' % d.get('status_code'))
+    sys.exit('detail JSON has no aweme_detail (status_code=%s)' % d.get('status_code'))
 ul = ad.get('video', {}).get('play_addr', {}).get('url_list') or []
-# douyinvod.com 直链已是无水印 CDN, 优先; 否则退回 aweme/v1/play 接口链(同样无水印)
+# A douyinvod.com direct link is already a no-watermark CDN URL, so prefer it; otherwise fall back to the aweme/v1/play API link (also no-watermark)
 best = next((u for u in ul if 'douyinvod.com' in u), None) or (ul[0] if ul else '')
 print(best)
 PY
 )
-  [ -z "$NOWM_URL" ] && { echo "detail JSON 中未找到播放地址"; exit 1; }
+  [ -z "$NOWM_URL" ] && { echo "No play URL found in detail JSON"; exit 1; }
 fi
 echo "       $NOWM_URL"
 
-echo "[4/4] 下载无水印 mp4"
+echo "[4/4] Downloading no-watermark mp4"
 OUTFILE="$OUT/douyin_$ITEM_ID.mp4"
 curl -sLA "$UA" --retry 3 --retry-all-errors --max-time 240 -H "Referer: $REF" "$NOWM_URL" -o "$OUTFILE"
 SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
-[ "$SIZE" -lt 100000 ] && { echo "下载文件过小 ($SIZE bytes), 可能被反爬"; rm -f "$OUTFILE"; exit 1; }
+[ "$SIZE" -lt 100000 ] && { echo "Downloaded file too small ($SIZE bytes), likely blocked by anti-scraping"; rm -f "$OUTFILE"; exit 1; }
 
 if file "$OUTFILE" | grep -q "ISO Media\|MP4"; then
   HUMAN=$(numfmt --to=iec "$SIZE" 2>/dev/null || echo "$SIZE B")
   echo "✓ $OUTFILE ($HUMAN)"
   echo ""
-  echo "下一步可选:"
-  echo "  transcribe \"$OUTFILE\"       # FunASR 中文转写"
+  echo "Optional next step:"
+  echo "  transcribe \"$OUTFILE\"       # FunASR Chinese transcription"
 else
-  echo "下载内容不是 mp4:"; file "$OUTFILE"
+  echo "Downloaded content is not an mp4:"; file "$OUTFILE"
   exit 1
 fi
